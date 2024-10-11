@@ -1,0 +1,82 @@
+name: CI Pipeline # Nome do workflow
+
+on:
+  push:
+    branches:
+      - master # O workflow vai rodar apenas quando houver push na branch 'master'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # O ambiente onde o workflow vai rodar (Ubuntu)
+
+    steps: # As etapas que serão executadas
+      - name: Checar repositório # Etapa 1: Baixar o código do repositório
+        uses: actions/checkout@v2
+
+      - name: Configurar Node.js # Etapa 2: Configurar a versão mais recente do Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "node" # Usar sempre a versão mais recente do Node.js
+
+      - name: Instalar dependências # Etapa 3: Instalar pacotes
+        run: npm install
+
+      - name: Rodar testes # Etapa 4: Rodar os testes definidos no projeto
+        run: npm test
+
+      - name: Instalar semver # Etapa 5: Instalar semver (biblioteca de versionamento semântico)
+        run: npm install -g semver
+
+      - name: Criar nova versão # Etapa 6: Calcular e criar a nova versão do projeto
+        id: version
+        run: |
+          git fetch --tags
+          LAST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+          if [ -z "$LAST_TAG" ]; then
+            LAST_TAG="v0.0.0"
+          fi
+          echo "Versão Atual: $LAST_TAG"
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s")
+
+          MAJOR=0
+          MINOR=0
+          PATCH=0
+
+          for COMMIT in "$COMMITS"; do
+            if [[ "$COMMIT" == *"BREAKING CHANGE"* ]]; then
+              MAJOR=1
+            elif [[ "$COMMIT" == *"feat"* ]]; then
+              MINOR=1
+            elif [[ "$COMMIT" == *"fix"* ]]; then
+              PATCH=1
+            fi
+          done
+
+          CURRENT_VERSION=${LAST_TAG#v}
+          NEW_VERSION=$CURRENT_VERSION
+
+          if [[ $MAJOR -eq 1 ]]; then
+            NEW_VERSION=$(semver -i major $CURRENT_VERSION)
+          elif [[ $MINOR -eq 1 ]]; then
+            NEW_VERSION=$(semver -i minor $CURRENT_VERSION)
+          elif [[ $PATCH -eq 1 ]]; then
+            NEW_VERSION=$(semver -i patch $CURRENT_VERSION)
+          fi
+
+          echo "Nova versão: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+
+      - name: Atualizar versão no package.json # Etapa 7: Atualizar o package.json com a nova versão
+        run: |
+          npm version ${{ env.new_version }} --no-git-tag-version
+
+      - name: Commit e Push # Etapa 8: Fazer commit e push da nova versão no Git
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN_GIT }}
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add package.json
+          git commit -m "chore(release): version ${{ env.new_version }}"
+          git tag v${{ env.new_version }}
+          git push origin master --tags
